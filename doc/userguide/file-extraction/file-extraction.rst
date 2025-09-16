@@ -21,6 +21,7 @@ Supported protocols are:
 - FTP
 - NFS
 - SMB
+- HTTP2
 
 Settings
 ~~~~~~~~
@@ -84,7 +85,7 @@ A protocol parser, like modbus, could permit to set a different
 store-depth value and use it rather than ``file-store.stream-depth``.
 
 Using the SHA256 for file names allows for automatic de-duplication of
-extracted files. However, the timestamp of a pre-existing file will be
+extracted files. However, the timestamp of a preexisting file will be
 updated if the same files is extracted again, similar to the `touch`
 command.
 
@@ -152,6 +153,7 @@ Or only store files from black list checksum sha1 ?
 Or finally store files from black list checksum sha256 ?
 
 ::
+
   alert http any any -> any any (msg:"Black list checksum match and extract SHA256"; filesha256:fileextraction-chksum.list; filestore; sid:6; rev:1;)
 
 Bundled with the Suricata download, is a file with more example rules. In the archive, go to the `rules` directory and check the ``files.rules`` file.

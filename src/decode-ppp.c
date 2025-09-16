@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2013 Open Information Security Foundation
+/* Copyright (C) 2007-2024 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -21,7 +21,6 @@
  * @{
  */
 
-
 /**
  * \file
  *
@@ -37,69 +36,111 @@
 
 #include "flow.h"
 
+#include "util-validate.h"
 #include "util-unittest.h"
 #include "util-debug.h"
 
-int DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
-        const uint8_t *pkt, uint32_t len)
+static int DecodePPPCompressedProto(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+        const uint8_t *pkt, uint32_t len, uint16_t proto_offset)
 {
-    StatsIncr(tv, dtv->counter_ppp);
+    const uint32_t data_offset = proto_offset + 1;
+    switch (*(pkt + proto_offset)) {
+        case 0x21: { /* PPP_IP */
+            if (unlikely(len < (data_offset + IPV4_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPVJU_PKT_TOO_SMALL);
+                return TM_ECODE_FAILED;
+            }
+            DEBUG_VALIDATE_BUG_ON(len < data_offset);
+            uint16_t iplen = (uint16_t)MIN((uint32_t)USHRT_MAX, len - data_offset);
+            return DecodeIPV4(tv, dtv, p, pkt + data_offset, iplen);
+        }
+        case 0x57: { /* PPP_IPV6 */
+            if (unlikely(len < (data_offset + IPV6_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPIPV6_PKT_TOO_SMALL);
+                return TM_ECODE_FAILED;
+            }
+            DEBUG_VALIDATE_BUG_ON(len < data_offset);
+            uint16_t iplen = (uint16_t)MIN((uint32_t)USHRT_MAX, len - data_offset);
+            return DecodeIPV6(tv, dtv, p, pkt + data_offset, iplen);
+        }
+        case 0x2f: /* PPP_VJ_UCOMP */
+            if (unlikely(len < (data_offset + IPV4_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPVJU_PKT_TOO_SMALL);
+                return TM_ECODE_FAILED;
+            }
 
-    if (unlikely(len < PPP_HEADER_LEN)) {
-        ENGINE_SET_INVALID_EVENT(p, PPP_PKT_TOO_SMALL);
-        return TM_ECODE_FAILED;
+            if (unlikely(len > data_offset + USHRT_MAX)) {
+                return TM_ECODE_FAILED;
+            }
+
+            if (likely(IPV4_GET_RAW_VER((IPV4Hdr *)(pkt + data_offset)) == 4)) {
+                p->flags |= PKT_PPP_VJ_UCOMP;
+                return DecodeIPV4(tv, dtv, p, pkt + data_offset, (uint16_t)(len - data_offset));
+            } else
+                return TM_ECODE_FAILED;
+            break;
+
+        default:
+            ENGINE_SET_EVENT(p, PPP_UNSUP_PROTO);
+            return TM_ECODE_OK;
     }
+}
 
-    p->ppph = (PPPHdr *)pkt;
-    if (unlikely(p->ppph == NULL))
-        return TM_ECODE_FAILED;
-
-    SCLogDebug("p %p pkt %p PPP protocol %04x Len: %" PRIu32 "",
-        p, pkt, SCNtohs(p->ppph->protocol), len);
-
-    switch (SCNtohs(p->ppph->protocol))
-    {
+static int DecodePPPUncompressedProto(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+        const uint8_t *pkt, uint32_t len, const uint16_t proto, const uint32_t data_offset)
+{
+    switch (proto) {
         case PPP_VJ_UCOMP:
-            if (unlikely(len < (PPP_HEADER_LEN + IPV4_HEADER_LEN))) {
-                ENGINE_SET_INVALID_EVENT(p,PPPVJU_PKT_TOO_SMALL);
-                p->ppph = NULL;
+            if (unlikely(len < (data_offset + IPV4_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPVJU_PKT_TOO_SMALL);
                 return TM_ECODE_FAILED;
             }
 
-            if (unlikely(len > PPP_HEADER_LEN + USHRT_MAX)) {
+            if (unlikely(len > data_offset + USHRT_MAX)) {
                 return TM_ECODE_FAILED;
             }
 
-            if (likely(IPV4_GET_RAW_VER((IPV4Hdr *)(pkt + PPP_HEADER_LEN)) == 4)) {
-                return DecodeIPV4(tv, dtv, p, pkt + PPP_HEADER_LEN, len - PPP_HEADER_LEN);
+            if (likely(IPV4_GET_RAW_VER((IPV4Hdr *)(pkt + data_offset)) == 4)) {
+                return DecodeIPV4(tv, dtv, p, pkt + data_offset, (uint16_t)(len - data_offset));
             } else
                 return TM_ECODE_FAILED;
             break;
 
         case PPP_IP:
-            if (unlikely(len < (PPP_HEADER_LEN + IPV4_HEADER_LEN))) {
-                ENGINE_SET_INVALID_EVENT(p,PPPIPV4_PKT_TOO_SMALL);
-                p->ppph = NULL;
+            if (unlikely(len < (data_offset + IPV4_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPIPV4_PKT_TOO_SMALL);
                 return TM_ECODE_FAILED;
             }
-            if (unlikely(len > PPP_HEADER_LEN + USHRT_MAX)) {
+            if (unlikely(len > data_offset + USHRT_MAX)) {
                 return TM_ECODE_FAILED;
             }
 
-            return DecodeIPV4(tv, dtv, p, pkt + PPP_HEADER_LEN, len - PPP_HEADER_LEN);
+            return DecodeIPV4(tv, dtv, p, pkt + data_offset, (uint16_t)(len - data_offset));
 
             /* PPP IPv6 was not tested */
         case PPP_IPV6:
-            if (unlikely(len < (PPP_HEADER_LEN + IPV6_HEADER_LEN))) {
-                ENGINE_SET_INVALID_EVENT(p,PPPIPV6_PKT_TOO_SMALL);
-                p->ppph = NULL;
+            if (unlikely(len < (data_offset + IPV6_HEADER_LEN))) {
+                ENGINE_SET_INVALID_EVENT(p, PPPIPV6_PKT_TOO_SMALL);
                 return TM_ECODE_FAILED;
             }
-            if (unlikely(len > PPP_HEADER_LEN + USHRT_MAX)) {
+            if (unlikely(len > data_offset + USHRT_MAX)) {
                 return TM_ECODE_FAILED;
             }
 
-            return DecodeIPV6(tv, dtv, p, pkt + PPP_HEADER_LEN, len - PPP_HEADER_LEN);
+            return DecodeIPV6(tv, dtv, p, pkt + data_offset, (uint16_t)(len - data_offset));
+
+        case PPP_IPCP:
+        case PPP_IPV6CP:
+        case PPP_LCP:
+        case PPP_PAP:
+        case PPP_CHAP:
+        case PPP_CCP:
+        case PPP_LQM:
+        case PPP_CBCP:
+        case PPP_COMP_DGRAM:
+        case PPP_CDPCP:
+            /* Valid types to be in PPP but don't inspect validity. */
+            return TM_ECODE_OK;
 
         case PPP_VJ_COMP:
         case PPP_IPX:
@@ -115,7 +156,6 @@ int DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         case PPP_SNS:
         case PPP_MPLS_UCAST:
         case PPP_MPLS_MCAST:
-        case PPP_IPCP:
         case PPP_OSICP:
         case PPP_NSCP:
         case PPP_DECNETCP:
@@ -123,21 +163,68 @@ int DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         case PPP_IPXCP:
         case PPP_STIICP:
         case PPP_VINESCP:
-        case PPP_IPV6CP:
         case PPP_MPLSCP:
-        case PPP_LCP:
-        case PPP_PAP:
-        case PPP_LQM:
-        case PPP_CHAP:
-            ENGINE_SET_EVENT(p,PPP_UNSUP_PROTO);
+            ENGINE_SET_EVENT(p, PPP_UNSUP_PROTO);
             return TM_ECODE_OK;
 
         default:
-            SCLogDebug("unknown PPP protocol: %" PRIx32 "",SCNtohs(p->ppph->protocol));
+            SCLogDebug("unknown PPP protocol: %x", proto);
             ENGINE_SET_INVALID_EVENT(p, PPP_WRONG_TYPE);
             return TM_ECODE_OK;
     }
+}
 
+int DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, const uint8_t *pkt, uint32_t len)
+{
+    DEBUG_VALIDATE_BUG_ON(pkt == NULL);
+
+    StatsIncr(tv, dtv->counter_ppp);
+    if (unlikely(len < 1)) {
+        ENGINE_SET_INVALID_EVENT(p, PPP_PKT_TOO_SMALL);
+        return TM_ECODE_FAILED;
+    }
+
+    uint16_t proto_offset = 0;
+    /* 0xff means we have a HDLC header: proto will start at offset 2 */
+    if (*pkt == 0xff) {
+        proto_offset = 2;
+        /* make sure the proto field at the offset fits */
+        if (len < 3) {
+            ENGINE_SET_INVALID_EVENT(p, PPP_PKT_TOO_SMALL);
+            return TM_ECODE_FAILED;
+        }
+    }
+    uint8_t proto_size = 0;
+    uint8_t proto_byte = *(pkt + proto_offset);
+    /* check if compressed protocol bit is set. */
+    if (proto_byte & 0x01) {
+        proto_size = 1;
+    } else {
+        proto_size = 2;
+    }
+    if (len < (proto_size + proto_offset)) {
+        ENGINE_SET_INVALID_EVENT(p, PPP_PKT_TOO_SMALL);
+        return TM_ECODE_FAILED;
+    }
+    if (!PacketIncreaseCheckLayers(p)) {
+        return TM_ECODE_FAILED;
+    }
+
+    const uint32_t data_offset = proto_offset + proto_size;
+    if (data_offset != 4) {
+        if (proto_size == 1) {
+            return DecodePPPCompressedProto(tv, dtv, p, pkt, len, proto_offset);
+        } else {
+            const uint16_t proto = SCNtohs(*(uint16_t *)(pkt + proto_offset));
+            return DecodePPPUncompressedProto(tv, dtv, p, pkt, len, proto, data_offset);
+        }
+    }
+    /* implied proto_offset + proto_size == 4, so continue below */
+
+    const PPPHdr *ppph = (PPPHdr *)pkt;
+    SCLogDebug(
+            "p %p pkt %p PPP protocol %04x Len: %" PRIu32 "", p, pkt, SCNtohs(ppph->protocol), len);
+    return DecodePPPUncompressedProto(tv, dtv, p, pkt, len, SCNtohs(ppph->protocol), data_offset);
 }
 
 /* TESTS BELOW */
@@ -147,7 +234,7 @@ int DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
  *  Decode malformed ip layer PPP packet
  *  Expected test value: 1
  */
-static int DecodePPPtest01 (void)
+static int DecodePPPtest01(void)
 {
     uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00 };
     Packet *p = PacketGetFromAlloc();
@@ -163,7 +250,7 @@ static int DecodePPPtest01 (void)
 
     /* Function my returns here with expected value */
 
-    if(ENGINE_ISSET_EVENT(p,PPPIPV4_PKT_TOO_SMALL))  {
+    if (ENGINE_ISSET_EVENT(p, PPPIPV4_PKT_TOO_SMALL)) {
         SCFree(p);
         return 1;
     }
@@ -176,13 +263,12 @@ static int DecodePPPtest01 (void)
  *  Decode malformed ppp layer packet
  *  Expected test value: 1
  */
-static int DecodePPPtest02 (void)
+static int DecodePPPtest02(void)
 {
-    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0xff, 0x45, 0xc0, 0x00, 0x2c, 0x4d,
-                           0xed, 0x00, 0x00, 0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01,
-                           0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
-                           0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
-                           0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
+    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0xff, 0x45, 0xc0, 0x00, 0x2c, 0x4d, 0xed, 0x00, 0x00,
+        0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01, 0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
+        0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00, 0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1,
+        0x00, 0x00 };
     Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
@@ -196,7 +282,7 @@ static int DecodePPPtest02 (void)
 
     /* Function must returns here */
 
-    if(ENGINE_ISSET_EVENT(p,PPP_WRONG_TYPE))  {
+    if (ENGINE_ISSET_EVENT(p, PPP_WRONG_TYPE)) {
         SCFree(p);
         return 1;
     }
@@ -211,13 +297,12 @@ static int DecodePPPtest02 (void)
  *  \retval 0 Test failed
  *  \retval 1 Test succeeded
  */
-static int DecodePPPtest03 (void)
+static int DecodePPPtest03(void)
 {
-    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00, 0x2c, 0x4d,
-                           0xed, 0x00, 0x00, 0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01,
-                           0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
-                           0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
-                           0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
+    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00, 0x2c, 0x4d, 0xed, 0x00, 0x00,
+        0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01, 0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
+        0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00, 0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1,
+        0x00, 0x00 };
     Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
@@ -233,27 +318,22 @@ static int DecodePPPtest03 (void)
 
     FlowShutdown();
 
-    if(p->ppph == NULL) {
+    if (ENGINE_ISSET_EVENT(p, PPP_PKT_TOO_SMALL)) {
         SCFree(p);
         return 0;
     }
 
-    if(ENGINE_ISSET_EVENT(p,PPP_PKT_TOO_SMALL))  {
+    if (ENGINE_ISSET_EVENT(p, PPPIPV4_PKT_TOO_SMALL)) {
         SCFree(p);
         return 0;
     }
 
-    if(ENGINE_ISSET_EVENT(p,PPPIPV4_PKT_TOO_SMALL))  {
+    if (ENGINE_ISSET_EVENT(p, PPP_WRONG_TYPE)) {
         SCFree(p);
         return 0;
     }
 
-    if(ENGINE_ISSET_EVENT(p,PPP_WRONG_TYPE))  {
-        SCFree(p);
-        return 0;
-    }
-
-    if (!(ENGINE_ISSET_EVENT(p,IPV4_TRUNC_PKT))) {
+    if (!(ENGINE_ISSET_EVENT(p, IPV4_TRUNC_PKT))) {
         SCFree(p);
         return 0;
     }
@@ -263,19 +343,17 @@ static int DecodePPPtest03 (void)
     return 1;
 }
 
-
 /*  DecodePPPtest04
  *  Check if ppp header is null
  *  Expected test value: 1
  */
 
-static int DecodePPPtest04 (void)
+static int DecodePPPtest04(void)
 {
-    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00, 0x2c, 0x4d,
-                           0xed, 0x00, 0x00, 0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01,
-                           0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
-                           0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
-                           0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
+    uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00, 0x2c, 0x4d, 0xed, 0x00, 0x00,
+        0xff, 0x06, 0xd5, 0x17, 0xbf, 0x01, 0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
+        0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00, 0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1,
+        0x00, 0x00 };
     Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
@@ -291,12 +369,7 @@ static int DecodePPPtest04 (void)
 
     FlowShutdown();
 
-    if(p->ppph == NULL) {
-        SCFree(p);
-        return 0;
-    }
-
-    if (!(ENGINE_ISSET_EVENT(p,IPV4_TRUNC_PKT))) {
+    if (!(ENGINE_ISSET_EVENT(p, IPV4_TRUNC_PKT))) {
         SCFree(p);
         return 0;
     }

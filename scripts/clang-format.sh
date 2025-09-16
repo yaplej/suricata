@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Script to clang-format suricata C code changes
 #
@@ -61,7 +61,7 @@ proper it provides additional functionality such as reformatting of all commits 
 
 Commands used in various situations:
 
-Formatting branch changes (compared to master):
+Formatting branch changes (compared to master or SURICATA_BRANCH env variable):
     branch          Format all changes in branch as additional commit
     rewrite-branch  Format every commit in branch and rewrite history
 
@@ -301,8 +301,7 @@ function RequireProgram {
 
 # Make sure we are running from the top-level git directory.
 # Same approach as for setup-decoder.sh. Good enough.
-# We could probably use git rev-parse --show-toplevel to do so, as long as we
-# handle the libhtp subfolder correctly.
+# We could probably use git rev-parse --show-toplevel to do so
 function SetTopLevelDir {
     if [ -e ./src/suricata.c ]; then
         # Do nothing.
@@ -335,14 +334,15 @@ function HelpCommand {
     esac
 }
 
-# Return first commit of branch (off master).
+# Return first commit of branch (off master or SURICATA_BRANCH env variable).
 #
 # Use $first_commit^ if you need the commit on master we branched off.
 # Do not compare with master directly as it will diff with the latest commit
 # on master. If our branch has not been rebased on the latest master, this
 # would result in including all new commits on master!
 function FirstCommitOfBranch {
-    local first_commit=$(git rev-list origin/master..HEAD | tail -n 1)
+    start="${SURICATA_BRANCH:-origin/master}"
+    local first_commit=$(git rev-list $start..HEAD | tail -n 1)
     echo $first_commit
 }
 
@@ -431,7 +431,8 @@ function CheckBranch {
             Error "Branch requires formatting"
             Debug "View required changes with clang-format: ${italic}$format_changes${normal}"
             Error "View required changes with: ${italic}$EXEC $command --diff${normal}"
-            Error "Use ${italic}$EXEC rewrite-branch${normal} or ${italic}$EXEC branch${normal} to fix formatting"
+            Error "Use ${italic}./scripts/$EXEC branch${normal} to fix formatting,
+            then add formatting changes to a new commit"
             ExitWith $EXIT_CODE_FORMATTING_REQUIRED
         else
             return $EXIT_CODE_FORMATTING_REQUIRED
@@ -543,7 +544,7 @@ function ReformatCommitsOnBranch {
         local first_commit=$(FirstCommitOfBranch)
         echo "First commit on branch: $first_commit"
         # Use --force in case it's run a second time on the same branch
-        git filter-branch --force --tree-filter "$GIT_CLANG_FORMAT $first_commit^" -- $first_commit..HEAD
+        git filter-branch --force --tree-filter "$GIT_CLANG_FORMAT --extensions c,h $first_commit^" -- $first_commit..HEAD
         if [ $? -ne 0 ]; then
             Die "Cannot rewrite branch. git filter-branch failed"
         fi
@@ -559,9 +560,13 @@ SetTopLevelDir
 
 RequireProgram GIT git
 # ubuntu uses clang-format-{version} name for newer versions. fedora not.
-RequireProgram GIT_CLANG_FORMAT git-clang-format-11 git-clang-format-10 git-clang-format-9 git-clang-format
+RequireProgram GIT_CLANG_FORMAT git-clang-format-14 git-clang-format-11 git-clang-format-10 git-clang-format-9 git-clang-format
 GIT_CLANG_FORMAT_BINARY=clang-format
-if [[ $GIT_CLANG_FORMAT =~ .*git-clang-format-11$ ]]; then
+if [[ $GIT_CLANG_FORMAT =~ .*git-clang-format-14$ ]]; then
+    # default binary is clang-format, specify the correct version.
+    # Alternative: git config clangformat.binary "clang-format-14"
+    GIT_CLANG_FORMAT_BINARY="clang-format-14"
+elif [[ $GIT_CLANG_FORMAT =~ .*git-clang-format-11$ ]]; then
     # default binary is clang-format, specify the correct version.
     # Alternative: git config clangformat.binary "clang-format-11"
     GIT_CLANG_FORMAT_BINARY="clang-format-11"
@@ -588,7 +593,7 @@ if [ $((clang_format_version_major + 0)) -lt $((CLANG_FORMAT_REQUIRED_VERSION + 
     Die "Require clang version $CLANG_FORMAT_REQUIRED_VERSION, found $clang_format_version_major ($clang_format_version)."
 fi
 
-# overwite git-clang-version for --diffstat as upstream does not have that yet
+# overwrite git-clang-version for --diffstat as upstream does not have that yet
 RequireProgram GIT_CLANG_FORMAT_DIFFSTAT scripts/git-clang-format-custom
 if [ "$GIT_CLANG_FORMAT_BINARY" != "clang-format" ]; then
     GIT_CLANG_FORMAT="$GIT_CLANG_FORMAT --binary $GIT_CLANG_FORMAT_BINARY"

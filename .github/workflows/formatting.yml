@@ -6,21 +6,36 @@ on:
     branches-ignore:
       - 'master'
       - 'master-*'
+    paths-ignore:
+      - "doc/**"
+      - "etc/schema.json"
   pull_request:
+    paths-ignore:
+      - "doc/**"
+      - "etc/schema.json"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+env:
+  DEBIAN_FRONTEND: "noninteractive"
 
 jobs:
 
   # Checking for correct formatting of branch for C code changes
   check-formatting:
-    name: Formatting Check (clang 9)
-    runs-on: ubuntu-18.04
-    container: ubuntu:18.04
-    continue-on-error: true
+    name: Formatting Check (clang 14)
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
+    continue-on-error: false
     steps:
 
       # Cache Rust stuff.
       - name: Cache cargo registry
-        uses: actions/cache@v1
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57
         with:
           path: ~/.cargo/registry
           key: cargo-registry
@@ -29,11 +44,13 @@ jobs:
         run: |
           apt update
           apt -y install \
-                libpcre3 \
-                libpcre3-dev \
+                libpcre2-dev \
                 build-essential \
                 autoconf \
                 automake \
+                cargo \
+                cbindgen \
+                clang-format-14 \
                 git \
                 libtool \
                 libpcap-dev \
@@ -49,21 +66,14 @@ jobs:
                 libnfnetlink0 \
                 libhiredis-dev \
                 libjansson-dev \
-                libpython2.7 \
                 make \
-                python \
                 rustc \
+                python-is-python3 \
+                python3 \
                 software-properties-common \
                 wget \
                 zlib1g \
                 zlib1g-dev
-      - name: Install packages for clang-format 9
-        run: |
-          # no need to install full clang
-          apt-get install -y clang-format-9
-      - name: Install cbindgen
-        run: cargo install --force --debug --version 0.14.1 cbindgen
-      - run: echo "::add-path::$HOME/.cargo/bin"
       # Checking out the branch is not as simple as "checking out".
       #
       # In case master has any new commits since we branched off, github will
@@ -81,7 +91,9 @@ jobs:
       # My patience simply ran too short to keep on looking. See follow-on
       # action to manually fix this up.
       - name: Checkout - might be merge commit!
-        uses: actions/checkout@v1
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          fetch-depth: 0
         # Use last commit of branch, not potential merge commit!
         #
         # This works perfectly well on pull requests within forked repos, but
@@ -89,7 +101,8 @@ jobs:
         # does not know the branch (from the forked repo). Argh.
 #        with:
 #          ref: ${{ github.head_ref }} # check out branch
-
+      # The action above is supposed to do this for us, but it doesn't appear to stick.
+      - run: /usr/bin/git config --global --add safe.directory /__w/suricata/suricata
       # Manually ignore the merge commit as none of the with/ref things tried
       # with actions/checkout seemed to work for pull requests from forks into
       # the OISF repo.
@@ -117,9 +130,8 @@ jobs:
               echo "No github merge commit found"
           fi
         shell: bash {0}
-      - run: git clone https://github.com/OISF/libhtp -b 0.5.x
       - run: ./autogen.sh
-      - run: ./configure --enable-unittests
+      - run: ./configure --enable-warnings --enable-unittests
       - name: Check formatting
         run: |
           ./scripts/clang-format.sh check-branch --diffstat --show-commits  >> check_formatting_log.txt 2>&1

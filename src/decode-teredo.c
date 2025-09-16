@@ -1,4 +1,4 @@
-/* Copyright (C) 2012-2020 Open Information Security Foundation
+/* Copyright (C) 2012-2021 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -36,8 +36,12 @@
 #include "decode.h"
 #include "decode-ipv6.h"
 #include "decode-teredo.h"
+
+#include "util-validate.h"
 #include "util-debug.h"
 #include "conf.h"
+
+#include "detect.h"
 #include "detect-engine-port.h"
 
 #define TEREDO_ORIG_INDICATION_LENGTH   8
@@ -88,8 +92,7 @@ static void DecodeTeredoConfigPorts(const char *pstr)
     g_teredo_ports_cnt = 0;
     for (DetectPort *p = head; p != NULL; p = p->next) {
         if (g_teredo_ports_cnt >= TEREDO_MAX_PORTS) {
-            SCLogWarning(SC_ERR_INVALID_YAML_CONF_ENTRY, "only %d Teredo ports can be defined",
-                    TEREDO_MAX_PORTS);
+            SCLogWarning("only %d Teredo ports can be defined", TEREDO_MAX_PORTS);
             break;
         }
         g_teredo_ports[g_teredo_ports_cnt++] = (int)p->port;
@@ -101,7 +104,7 @@ static void DecodeTeredoConfigPorts(const char *pstr)
 void DecodeTeredoConfig(void)
 {
     int enabled = 0;
-    if (ConfGetBool("decoder.teredo.enabled", &enabled) == 1) {
+    if (SCConfGetBool("decoder.teredo.enabled", &enabled) == 1) {
         if (enabled) {
             g_teredo_enabled = true;
         } else {
@@ -109,7 +112,7 @@ void DecodeTeredoConfig(void)
         }
     }
     if (g_teredo_enabled) {
-        ConfNode *node = ConfGetNode("decoder.teredo.ports");
+        SCConfNode *node = SCConfGetNode("decoder.teredo.ports");
         if (node && node->val) {
             DecodeTeredoConfigPorts(node->val);
         }
@@ -124,6 +127,8 @@ void DecodeTeredoConfig(void)
 int DecodeTeredo(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         const uint8_t *pkt, uint16_t len)
 {
+    DEBUG_VALIDATE_BUG_ON(pkt == NULL);
+
     if (!g_teredo_enabled)
         return TM_ECODE_FAILED;
 
@@ -177,7 +182,7 @@ int DecodeTeredo(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
 
         if (len ==  IPV6_HEADER_LEN +
                 IPV6_GET_RAW_PLEN(thdr) + (start - pkt)) {
-            int blen = len - (start - pkt);
+            uint32_t blen = len - (uint32_t)(start - pkt);
             /* spawn off tunnel packet */
             Packet *tp = PacketTunnelPktSetup(tv, dtv, p, start, blen,
                     DECODE_TUNNEL_IPV6_TEREDO);

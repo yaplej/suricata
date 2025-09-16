@@ -15,12 +15,15 @@
  * 02110-1301, USA.
  */
 
+//! Plugin utility module.
+
+use suricata_sys::sys::SCLogGetLogLevel;
+
 pub fn init() {
     unsafe {
-        let context = super::core::SCGetContext();
-        super::core::init_ffi(context);
+        let context = crate::core::SCGetContext();
+        crate::core::init_ffi(context);
 
-        let level = super::core::SCLogGetLogLevel();
-        super::log::log_set_level(level);
+        crate::debug::LEVEL = SCLogGetLogLevel();
     }
 }

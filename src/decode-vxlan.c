@@ -1,4 +1,4 @@
-/* Copyright (C) 2019 Open Information Security Foundation
+/* Copyright (C) 2019-2021 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -31,16 +31,14 @@
 #include "decode-vxlan.h"
 #include "decode-events.h"
 
+#include "detect.h"
 #include "detect-engine-port.h"
 
 #include "flow.h"
 
+#include "util-validate.h"
 #include "util-unittest.h"
 #include "util-debug.h"
-
-#include "pkt-var.h"
-#include "util-profiling.h"
-#include "host.h"
 
 #define VXLAN_HEADER_LEN sizeof(VXLANHeader)
 
@@ -88,8 +86,7 @@ static void DecodeVXLANConfigPorts(const char *pstr)
     g_vxlan_ports_idx = 0;
     for (DetectPort *p = head; p != NULL; p = p->next) {
         if (g_vxlan_ports_idx >= VXLAN_MAX_PORTS) {
-            SCLogWarning(SC_ERR_INVALID_YAML_CONF_ENTRY, "more than %d VXLAN ports defined",
-                    VXLAN_MAX_PORTS);
+            SCLogWarning("more than %d VXLAN ports defined", VXLAN_MAX_PORTS);
             break;
         }
         g_vxlan_ports[g_vxlan_ports_idx++] = (int)p->port;
@@ -101,7 +98,7 @@ static void DecodeVXLANConfigPorts(const char *pstr)
 void DecodeVXLANConfig(void)
 {
     int enabled = 0;
-    if (ConfGetBool("decoder.vxlan.enabled", &enabled) == 1) {
+    if (SCConfGetBool("decoder.vxlan.enabled", &enabled) == 1) {
         if (enabled) {
             g_vxlan_enabled = true;
         } else {
@@ -110,7 +107,7 @@ void DecodeVXLANConfig(void)
     }
 
     if (g_vxlan_enabled) {
-        ConfNode *node = ConfGetNode("decoder.vxlan.ports");
+        SCConfNode *node = SCConfGetNode("decoder.vxlan.ports");
         if (node && node->val) {
             DecodeVXLANConfigPorts(node->val);
         } else {
@@ -125,10 +122,7 @@ void DecodeVXLANConfig(void)
 int DecodeVXLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         const uint8_t *pkt, uint32_t len)
 {
-    EthernetHdr *ethh = (EthernetHdr *)(pkt + VXLAN_HEADER_LEN);
-
-    uint16_t eth_type;
-    int decode_tunnel_proto = DECODE_TUNNEL_UNSET;
+    DEBUG_VALIDATE_BUG_ON(pkt == NULL);
 
     /* Initial packet validation */
     if (unlikely(!g_vxlan_enabled))
@@ -136,6 +130,9 @@ int DecodeVXLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
 
     if (len < (VXLAN_HEADER_LEN + sizeof(EthernetHdr)))
         return TM_ECODE_FAILED;
+    if (!PacketIncreaseCheckLayers(p)) {
+        return TM_ECODE_FAILED;
+    }
 
     const VXLANHeader *vxlanh = (const VXLANHeader *)pkt;
     if ((vxlanh->flags[0] & 0x08) == 0 || vxlanh->res != 0)
@@ -149,8 +146,11 @@ int DecodeVXLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
     /* Increment stats counter for VXLAN packets */
     StatsIncr(tv, dtv->counter_vxlan);
 
+    EthernetHdr *ethh = (EthernetHdr *)(pkt + VXLAN_HEADER_LEN);
+    int decode_tunnel_proto = DECODE_TUNNEL_UNSET;
+
     /* Look at encapsulated Ethernet frame to get next protocol  */
-    eth_type = SCNtohs(ethh->eth_type);
+    uint16_t eth_type = SCNtohs(ethh->eth_type);
     SCLogDebug("VXLAN ethertype 0x%04x", eth_type);
 
     switch (eth_type) {
@@ -211,26 +211,23 @@ static int DecodeVXLANtest01 (void)
     FAIL_IF_NULL(p);
     ThreadVars tv;
     DecodeThreadVars dtv;
-
-    DecodeVXLANConfigPorts(VXLAN_DEFAULT_PORT_S);
-
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(p, 0, SIZE_OF_PACKET);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
+    DecodeVXLANConfigPorts(VXLAN_DEFAULT_PORT_S);
     FlowInitConfig(FLOW_QUIET);
-    DecodeUDP(&tv, &dtv, p, raw_vxlan, sizeof(raw_vxlan));
 
-    FAIL_IF(p->udph == NULL);
+    DecodeUDP(&tv, &dtv, p, raw_vxlan, sizeof(raw_vxlan));
+    FAIL_IF_NOT(PacketIsUDP(p));
     FAIL_IF(tv.decode_pq.top == NULL);
 
     Packet *tp = PacketDequeueNoLock(&tv.decode_pq);
-    FAIL_IF(tp->udph == NULL);
+    FAIL_IF_NOT(PacketIsUDP(tp));
     FAIL_IF_NOT(tp->sp == 53);
 
     FlowShutdown();
     PacketFree(p);
-    PacketFree(tp);
+    PacketFreeOrRelease(tp);
     PASS;
 }
 
@@ -253,17 +250,14 @@ static int DecodeVXLANtest02 (void)
     FAIL_IF_NULL(p);
     ThreadVars tv;
     DecodeThreadVars dtv;
-
-    DecodeVXLANConfigPorts("1");
-
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(p, 0, SIZE_OF_PACKET);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
+    DecodeVXLANConfigPorts("1");
     FlowInitConfig(FLOW_QUIET);
-    DecodeUDP(&tv, &dtv, p, raw_vxlan, sizeof(raw_vxlan));
 
-    FAIL_IF(p->udph == NULL);
+    DecodeUDP(&tv, &dtv, p, raw_vxlan, sizeof(raw_vxlan));
+    FAIL_IF_NOT(PacketIsUDP(p));
     FAIL_IF(tv.decode_pq.top != NULL);
 
     DecodeVXLANConfigPorts(VXLAN_DEFAULT_PORT_S); /* reset */

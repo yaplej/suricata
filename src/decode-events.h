@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2013 Open Information Security Foundation
+/* Copyright (C) 2007-2022 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -22,13 +22,16 @@
  * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
-#ifndef __DECODE_EVENTS_H__
-#define __DECODE_EVENTS_H__
+#ifndef SURICATA_DECODE_EVENTS_H
+#define SURICATA_DECODE_EVENTS_H
 
 /* packet decoder events */
 enum {
+    /* AF_PACKET EVENTS */
+    AFP_TRUNC_PKT = 0, /**< packet truncated by af-packet */
+
     /* IPV4 EVENTS */
-    IPV4_PKT_TOO_SMALL = 0,       /**< ipv4 pkt smaller than minimum header size */
+    IPV4_PKT_TOO_SMALL,           /**< ipv4 pkt smaller than minimum header size */
     IPV4_HLEN_TOO_SMALL,          /**< ipv4 header smaller than minimum size */
     IPV4_IPLEN_SMALLER_THAN_HLEN, /**< ipv4 pkt len smaller than ip header size */
     IPV4_TRUNC_PKT,               /**< truncated ipv4 packet */
@@ -58,8 +61,8 @@ enum {
     ICMPV6_IPV6_UNKNOWN_VER,            /**< unknown version in icmpv6 packet */
     ICMPV6_IPV6_TRUNC_PKT,              /**< truncated icmpv6 packet */
     ICMPV6_MLD_MESSAGE_WITH_INVALID_HL, /**< invalid MLD that doesn't have HL 1 */
-    ICMPV6_UNASSIGNED_TYPE,             /**< unsassigned ICMPv6 type */
-    ICMPV6_EXPERIMENTATION_TYPE,        /**< uprivate experimentation ICMPv6 type */
+    ICMPV6_UNASSIGNED_TYPE,             /**< unassigned ICMPv6 type */
+    ICMPV6_EXPERIMENTATION_TYPE,        /**< private experimentation ICMPv6 type */
 
     /* IPV6 EVENTS */
     IPV6_PKT_TOO_SMALL,     /**< ipv6 packet smaller than minimum size */
@@ -103,12 +106,17 @@ enum {
     UDP_PKT_TOO_SMALL,  /**< udp packet smaller than minimum size */
     UDP_HLEN_TOO_SMALL, /**< udp header smaller than minimum size */
     UDP_HLEN_INVALID,   /**< invalid len of upd header */
+    UDP_LEN_INVALID,    /**< packet len in header is invalid */
 
     /* SLL EVENTS */
     SLL_PKT_TOO_SMALL, /**< sll packet smaller than minimum size */
 
+    /* SLL2 EVENTS */
+    SLL2_PKT_TOO_SMALL, /**< sll2 packet smaller than minimum size */
+
     /* ETHERNET EVENTS */
-    ETHERNET_PKT_TOO_SMALL, /**< ethernet packet smaller than minimum size */
+    ETHERNET_PKT_TOO_SMALL,     /**< ethernet packet smaller than minimum size */
+    ETHERNET_UNKNOWN_ETHERTYPE, /**< ethertype unknown/unhandled*/
 
     /* PPP EVENTS */
     PPP_PKT_TOO_SMALL,     /**< ppp packet smaller than minimum size */
@@ -147,6 +155,10 @@ enum {
 
     IEEE8021AH_HEADER_TOO_SMALL,
 
+    /* VNTAG EVENTS */
+    VNTAG_HEADER_TOO_SMALL, /**< vntag header smaller than minimum size */
+    VNTAG_UNKNOWN_TYPE,     /**< vntag unknown type */
+
     /* RAW EVENTS */
     IPRAW_INVALID_IPV, /**< invalid ip version in ip raw */
 
@@ -157,11 +169,15 @@ enum {
     /* SCTP EVENTS */
     SCTP_PKT_TOO_SMALL, /**< sctp packet smaller than minimum size */
 
-    /* Fragmentation reasembly events. */
+    /* ESP EVENTS */
+    ESP_PKT_TOO_SMALL, /**< esp packet smaller than minimum size */
+
+    /* Fragmentation reassembly events. */
     IPV4_FRAG_PKT_TOO_LARGE,
     IPV6_FRAG_PKT_TOO_LARGE,
     IPV4_FRAG_OVERLAP,
     IPV6_FRAG_OVERLAP,
+    IPV6_FRAG_INVALID_LENGTH,
 
     /* Fragment ignored due to internal error */
     IPV4_FRAG_IGNORED,
@@ -200,8 +216,19 @@ enum {
     /* Cisco HDLC events. */
     CHDLC_PKT_TOO_SMALL,
 
+    /* NSH events */
+    NSH_HEADER_TOO_SMALL,
+    NSH_UNSUPPORTED_VERSION,
+    NSH_BAD_HEADER_LENGTH,
+    NSH_RESERVED_TYPE,
+    NSH_UNSUPPORTED_TYPE,
+    NSH_UNKNOWN_PAYLOAD,
+
+    /* generic events */
+    GENERIC_TOO_MANY_LAYERS,
+
     /* END OF DECODE EVENTS ON SINGLE PACKET */
-    DECODE_EVENT_PACKET_MAX = CHDLC_PKT_TOO_SMALL,
+    DECODE_EVENT_PACKET_MAX = GENERIC_TOO_MANY_LAYERS,
 
     /* STREAM EVENTS */
     STREAM_3WHS_ACK_IN_WRONG_DIR,
@@ -213,8 +240,10 @@ enum {
     STREAM_3WHS_SYNACK_TOSERVER_ON_SYN_RECV,
     STREAM_3WHS_SYNACK_WITH_WRONG_ACK,
     STREAM_3WHS_SYNACK_FLOOD,
+    STREAM_3WHS_SYNACK_TFO_DATA_IGNORED,
     STREAM_3WHS_SYN_RESEND_DIFF_SEQ_ON_SYN_RECV,
     STREAM_3WHS_SYN_TOCLIENT_ON_SYN_RECV,
+    STREAM_3WHS_SYN_FLOOD,
     STREAM_3WHS_WRONG_SEQ_WRONG_ACK,
     STREAM_3WHS_ACK_DATA_INJECT,
     STREAM_4WHS_SYNACK_WITH_WRONG_ACK,
@@ -237,6 +266,7 @@ enum {
     STREAM_EST_SYN_RESEND_DIFF_SEQ,
     STREAM_EST_SYN_TOCLIENT,
     STREAM_EST_INVALID_ACK,
+    STREAM_EST_ACK_ZWP_DATA,
     STREAM_FIN_INVALID_ACK,
     STREAM_FIN1_ACK_WRONG_SEQ,
     STREAM_FIN1_FIN_WRONG_SEQ,
@@ -246,6 +276,7 @@ enum {
     STREAM_FIN2_INVALID_ACK,
     STREAM_FIN_BUT_NO_SESSION,
     STREAM_FIN_OUT_OF_WINDOW,
+    STREAM_FIN_SYN,
     STREAM_LASTACK_ACK_WRONG_SEQ,
     STREAM_LASTACK_INVALID_ACK,
     STREAM_RST_BUT_NO_SESSION,
@@ -256,7 +287,9 @@ enum {
     STREAM_PKT_INVALID_ACK,
     STREAM_PKT_BROKEN_ACK,
     STREAM_RST_INVALID_ACK,
+    STREAM_RST_WITH_DATA,
     STREAM_PKT_RETRANSMISSION,
+    STREAM_PKT_SPURIOUS_RETRANSMISSION,
     STREAM_PKT_BAD_WINDOW_UPDATE,
 
     STREAM_SUSPECTED_RST_INJECT,
@@ -266,6 +299,20 @@ enum {
     STREAM_REASSEMBLY_NO_SEGMENT,
     STREAM_REASSEMBLY_SEQ_GAP,
     STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA,
+    STREAM_REASSEMBLY_DEPTH_REACHED,
+    STREAM_REASSEMBLY_INSERT_MEMCAP,
+    STREAM_REASSEMBLY_INSERT_LIMIT,
+    STREAM_REASSEMBLY_INSERT_INVALID,
+    STREAM_REASSEMBLY_URGENT_OOB_LIMIT_REACHED,
+
+    /* ARP EVENTS */
+    ARP_PKT_TOO_SMALL,         /**< arp packet smaller than minimum size */
+    ARP_UNSUPPORTED_HARDWARE,  /**< arp hw_type is not ethernet */
+    ARP_UNSUPPORTED_PROTOCOL,  /**< arp proto_type is not ipv4 */
+    ARP_INVALID_PKT,           /**< arp pkt len is not 28 */
+    ARP_INVALID_HARDWARE_SIZE, /**< arp hw size is 6 */
+    ARP_INVALID_PROTOCOL_SIZE, /**< arp proto size is not 4 */
+    ARP_UNSUPPORTED_OPCODE,    /**< arp opcode is not listed */
 
     /* should always be last! */
     DECODE_EVENT_MAX,
@@ -283,4 +330,4 @@ struct DecodeEvents_ {
 /* +1 for the end of table marker */
 extern const struct DecodeEvents_ DEvents[DECODE_EVENT_MAX + 1];
 
-#endif /* __DECODE_EVENTS_H__ */
+#endif /* SURICATA_DECODE_EVENTS_H */
